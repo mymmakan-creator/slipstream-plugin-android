@@ -132,7 +132,11 @@ tasks.withType<CargoBuildTask>().configureEach {
 
 tasks.whenTaskAdded {
     when (name) {
-        "mergeDebugJniLibFolders", "mergeReleaseJniLibFolders" -> dependsOn("cargoBuild")
+        "mergeDebugJniLibFolders", "mergeReleaseJniLibFolders" -> {
+            dependsOn("cargoBuild")
+            // Track Rust JNI output without adding a second source set (avoids duplicate resources).
+            inputs.dir(layout.buildDirectory.dir("rustJniLibs/android"))
+        }
     }
 }
 
