@@ -1,0 +1,86 @@
+name: Build Universal APK
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    env:
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+      OPENSSL_VERSION: 3.5.4
+      TARGET_ABIS: armeabi-v7a,arm64-v8a,x86,x86_64
+      ANDROID_API_LEVEL: 33
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: 17
+          distribution: temurin
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y wget unzip curl build-essential cmake pkg-config python3 git
+
+      - name: Download Android SDK & NDK
+        run: |
+          mkdir -p $ANDROID_SDK_ROOT
+          cd $ANDROID_SDK_ROOT
+          wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O cmdline-tools.zip
+          unzip cmdline-tools.zip -d cmdline-tools
+          yes | $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools/bin/sdkmanager --licenses
+          $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools/bin/sdkmanager \
+            "ndk;27.2.12479018" \
+            "platforms;android-$ANDROID_API_LEVEL" \
+            "platform-tools" \
+            "cmake;3.31.1"
+
+      - name: Build OpenSSL for all ABIs
+        run: |
+          mkdir -p openssl-android
+          cd openssl-android
+          wget https://www.openssl.org/source/openssl-$OPENSSL_VERSION.tar.gz
+          tar -xf openssl-$OPENSSL_VERSION.tar.gz
+          cd openssl-$OPENSSL_VERSION
+          export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+
+          for ABI in ${TARGET_ABIS//,/ }
+          do
+            echo "Building OpenSSL for $ABI..."
+            mkdir -p build_$ABI
+            ./Configure android-$ABI -D__ANDROID_API__=$ANDROID_API_LEVEL no-shared --prefix=$PWD/build_$ABI
+            make -j$(nproc)
+            make install_sw
+            make clean
+          done
+
+      - name: Build Picoquic + Rust FFI for all ABIs
+        run: |
+          cd app/src/main/rust/slipstream-rust
+          for ABI in ${TARGET_ABIS//,/ }
+          do
+            echo "Building Rust FFI for $ABI..."
+            export OPENSSL_ROOT_DIR=$PWD/../../../openssl-android/openssl-$OPENSSL_VERSION/build_$ABI
+            export OPENSSL_INCLUDE_DIR=$OPENSSL_ROOT_DIR/include
+            export OPENSSL_LIB_DIR=$OPENSSL_ROOT_DIR/lib
+            cargo build --target $ABI --release
+          done
+
+      - name: Build APK with Gradle
+        run: ./gradlew --no-daemon assembleRelease
+
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: slipstream-universal-apk
+          path: app/build/outputs/apk/release/*.apk
