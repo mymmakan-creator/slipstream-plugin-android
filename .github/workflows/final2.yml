@@ -1,0 +1,49 @@
+name: Build Android Release
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        components: rust-src,cargo
+        profile: minimal
+        override: true
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake pkg-config build-essential python3
+
+    - name: Build OpenSSL for Android
+      run: |
+        git clone https://github.com/openssl/openssl.git
+        cd openssl
+        ./Configure android-arm -D__ANDROID_API__=33 no-shared no-unit-test --prefix=$HOME/openssl-android
+        make -j$(nproc)
+        make install
+        cd ..
+
+    - name: Set OpenSSL environment variables
+      run: |
+        echo "export OPENSSL_ROOT_DIR=$HOME/openssl-android" >> $GITHUB_ENV
+        echo "export OPENSSL_INCLUDE_DIR=$HOME/openssl-android/include" >> $GITHUB_ENV
+        echo "export OPENSSL_LIB_DIR=$HOME/openssl-android/lib" >> $GITHUB_ENV
+
+    - name: Build APK
+      run: |
+        ./gradlew --no-daemon assembleRelease
