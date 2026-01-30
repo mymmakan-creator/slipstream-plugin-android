@@ -1,0 +1,72 @@
+name: Build Android APK with OpenSSL
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      ANDROID_NDK_HOME: /usr/local/lib/android/sdk/ndk/27.2.12479018
+      OPENSSL_VERSION: "1.1.1u"
+      API_LEVEL: 21
+      ABIS: "armeabi-v7a arm64-v8a x86_64"
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v3
+
+      - name: Setup JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl perl unzip
+
+      - name: Download & Build OpenSSL for all ABIs
+        run: |
+          for ABI in $ABIS; do
+            echo "Building OpenSSL for $ABI"
+            curl -O https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz
+            tar -xzf openssl-${OPENSSL_VERSION}.tar.gz
+            cd openssl-${OPENSSL_VERSION}
+            
+            TOOLCHAIN=${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64
+            case $ABI in
+              armeabi-v7a)
+                export CC=$TOOLCHAIN/bin/armv7a-linux-androideabi${API_LEVEL}-clang
+                ;;
+              arm64-v8a)
+                export CC=$TOOLCHAIN/bin/aarch64-linux-android${API_LEVEL}-clang
+                ;;
+              x86_64)
+                export CC=$TOOLCHAIN/bin/x86_64-linux-android${API_LEVEL}-clang
+                ;;
+            esac
+
+            OUT_DIR=$(pwd)/../app/src/main/jniLibs/$ABI
+            mkdir -p $OUT_DIR
+
+            ./Configure android-$ABI no-shared no-unit-test --prefix=$OUT_DIR
+            make -j$(nproc)
+            make install
+            cd ..
+          done
+
+      - name: Build APK with Gradle
+        run: |
+          ./gradlew assembleRelease
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v3
+        with:
+          name: myapp-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
